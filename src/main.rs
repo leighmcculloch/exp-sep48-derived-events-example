@@ -266,7 +266,7 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
 
     // Add basic information
     result.insert("event_type".to_string(), json!(spec.name.to_string()));
-    result.insert("contract_id".to_string(), json!(format!("{:?}", event.contract_id)));
+    result.insert("contract_id".to_string(), serde_json::to_value(&event.contract_id).unwrap());
 
     // Access the event data
     let topics = &event_body.topics;
