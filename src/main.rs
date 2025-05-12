@@ -118,7 +118,12 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
                     return false; // Symbol names don't match
                 }
             },
-            _ => return false, // Event topic at this position is not a Symbol
+            ScVal::String(event_topic_str) => {
+                if event_topic_str.to_string() != spec_prefix_sym.to_string() {
+                    return false; // Symbol/String names don't match
+                }
+            },
+            _ => return false, // Event topic at this position is not a Symbol/String
         }
     }
 
