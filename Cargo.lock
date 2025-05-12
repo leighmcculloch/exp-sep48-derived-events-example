@@ -160,17 +160,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
-name = "consumer-example-events"
-version = "0.1.0"
-dependencies = [
- "clap",
- "hex",
- "serde",
- "serde_json",
- "stellar-xdr",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -500,6 +489,17 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "stellar-events"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hex",
+ "serde",
+ "serde_json",
+ "stellar-xdr",
+]
 
 [[package]]
 name = "stellar-strkey"
