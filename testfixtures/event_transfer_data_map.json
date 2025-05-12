@@ -1,0 +1,20 @@
+{
+  "ext": "v0",
+  "contract_id": "CBUZJXHZ6PBS2YR3SEJZ3CIGMQBYP6367D3KQAR2NB3U2I5AOWLC4DU2",
+  "type_": "contract",
+  "body": {
+    "v0": {
+      "topics": [
+        { "symbol": "transfer" },
+        { "address": "GBMBVAHBE6D4AJXJJVTBQTVU4G7SN4FEIJOL5YTOHZ4WCUMKQ52ANL2B" },
+        { "address": "GCAN5IE4PWMWSMFZCYQRCJM73MCPG5JD2R7WF5HIFHHHDBWSDJFIWX7X" }
+      ],
+      "data": {
+        "map": [
+          { "key": {"symbol": "amount"}, "val": { "i128": { "hi": 0, "lo": 10000 } } },
+          { "key": {"symbol": "from_muxed_id"}, "val": { "u64": 1 } }
+        ]
+      }
+    }
+  }
+}
