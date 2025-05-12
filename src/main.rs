@@ -323,38 +323,41 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
     let topics = &event_body.topics;
     let skip_topics = spec.prefix_topics.len();
 
+    // Initialize flattened parameters map
+    let mut params = serde_json::Map::new();
+
     // Add topic parameters with their names from the spec
-    let mut topic_values = serde_json::Map::new();
     for (i, param) in topic_params.iter().enumerate() {
         let topic_index = skip_topics + i;
         if topic_index < topics.len() {
-            topic_values.insert(
+            params.insert(
                 param.name.to_string(),
                 json!({
                     "value": sc_val_to_json(&topics[topic_index]),
-                    "type": format!("{:?}", param.type_)
+                    "type": format!("{:?}", param.type_),
+                    "location": "topic"
                 })
             );
         }
     }
-    result.insert("topics".to_string(), JsonValue::Object(topic_values));
 
     // Process data according to format
     match spec.data_format {
         ScSpecEventDataFormat::SingleValue => {
             if !data_params.is_empty() {
                 let param = data_params[0];
-                let data_value = json!({
-                    "value": sc_val_to_json(&event_body.data),
-                    "type": format!("{:?}", param.type_)
-                });
-                result.insert("data".to_string(), json!({ param.name.to_string(): data_value }));
+                params.insert(
+                    param.name.to_string(),
+                    json!({
+                        "value": sc_val_to_json(&event_body.data),
+                        "type": format!("{:?}", param.type_),
+                        "location": "data"
+                    })
+                );
             }
         },
         ScSpecEventDataFormat::Map => {
             if let ScVal::Map(Some(map_entries)) = &event_body.data {
-                let mut data_values = serde_json::Map::new();
-
                 // Create a lookup for data params by name
                 let data_param_map: HashMap<String, &ScSpecEventParamV0> = data_params
                     .iter()
@@ -372,23 +375,20 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
                             None => "Unknown".to_string(),
                         };
 
-                        data_values.insert(
+                        params.insert(
                             key_str,
                             json!({
                                 "value": sc_val_to_json(&entry.val),
-                                "type": type_str
+                                "type": type_str,
+                                "location": "data"
                             })
                         );
                     }
                 }
-
-                result.insert("data".to_string(), JsonValue::Object(data_values));
             }
         },
         ScSpecEventDataFormat::Vec => {
             if let ScVal::Vec(Some(vec_entries)) = &event_body.data {
-                let mut data_values = serde_json::Map::new();
-
                 for (i, val) in vec_entries.iter().enumerate() {
                     let param_name = if i < data_params.len() {
                         data_params[i].name.to_string()
@@ -402,19 +402,21 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
                         "Unknown".to_string()
                     };
 
-                    data_values.insert(
+                    params.insert(
                         param_name,
                         json!({
                             "value": sc_val_to_json(val),
-                            "type": type_str
+                            "type": type_str,
+                            "location": "data"
                         })
                     );
                 }
-
-                result.insert("data".to_string(), JsonValue::Object(data_values));
             }
         },
     }
+
+    // Add the flattened parameters to the result
+    result.insert("params".to_string(), JsonValue::Object(params));
 
     JsonValue::Object(result)
 }
