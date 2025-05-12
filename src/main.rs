@@ -307,116 +307,125 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
     result.insert("event_type".to_string(), json!(spec.name.to_string()));
     result.insert("contract_id".to_string(), json!(format!("{:?}", event.contract_id)));
 
-    // Separate spec params by location
-    let mut topic_params: Vec<&ScSpecEventParamV0> = Vec::new();
-    let mut data_params: Vec<&ScSpecEventParamV0> = Vec::new();
-
-    for param in spec.params.iter() {
-        if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
-            topic_params.push(param);
-        } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
-            data_params.push(param);
-        }
-    }
-
-    // Process topics
+    // Keep track of parameters in spec-defined order
     let topics = &event_body.topics;
     let skip_topics = spec.prefix_topics.len();
 
-    // Initialize flattened parameters map
-    let mut params = serde_json::Map::new();
-
-    // Add topic parameters with their names from the spec
-    for (i, param) in topic_params.iter().enumerate() {
-        let topic_index = skip_topics + i;
-        if topic_index < topics.len() {
-            params.insert(
-                param.name.to_string(),
-                json!({
-                    "value": sc_val_to_json(&topics[topic_index]),
-                    "type": format!("{:?}", param.type_),
-                    "location": "topic"
-                })
-            );
+    // Create a map for looking up map data entries by key
+    let mut map_data_entries: HashMap<String, &ScVal> = HashMap::new();
+    if let ScVal::Map(Some(map_entries)) = &event_body.data {
+        for entry in map_entries.iter() {
+            if let ScVal::Symbol(key) = &entry.key {
+                map_data_entries.insert(key.to_string(), &entry.val);
+            }
         }
     }
 
-    // Process data according to format
-    match spec.data_format {
-        ScSpecEventDataFormat::SingleValue => {
-            if !data_params.is_empty() {
-                let param = data_params[0];
+    // Extract vec data entries if available
+    let mut vec_data_entries: Vec<&ScVal> = Vec::new();
+    if let ScVal::Vec(Some(vec_entries)) = &event_body.data {
+        vec_data_entries = vec_entries.iter().collect();
+    }
+
+    // Initialize ordered parameters map
+    // Use LinkedHashMap to preserve insertion order
+    use indexmap::IndexMap;
+    let mut params = IndexMap::new();
+
+    // Add parameters in the original spec order
+    for (i, param) in spec.params.iter().enumerate() {
+        let param_name = param.name.to_string();
+
+        // There are only two possible locations in the current XDR spec:
+        // TopicList and Data. We handle them explicitly.
+        if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
+            // Topic parameter
+            let topic_index = skip_topics + i - params.len(); // Adjust index for previous processed params
+            if topic_index < topics.len() {
                 params.insert(
-                    param.name.to_string(),
+                    param_name,
                     json!({
-                        "value": sc_val_to_json(&event_body.data),
+                        "value": sc_val_to_json(&topics[topic_index]),
                         "type": format!("{:?}", param.type_),
-                        "location": "data"
+                        "location": "topic"
                     })
                 );
             }
-        },
-        ScSpecEventDataFormat::Map => {
-            if let ScVal::Map(Some(map_entries)) = &event_body.data {
-                // Create a lookup for data params by name
-                let data_param_map: HashMap<String, &ScSpecEventParamV0> = data_params
-                    .iter()
-                    .map(|p| (p.name.to_string(), *p))
-                    .collect();
-
-                // Process each map entry
-                for entry in map_entries.iter() {
-                    if let ScVal::Symbol(key) = &entry.key {
-                        let key_str = key.to_string();
-
-                        // Find the parameter type if available
-                        let type_str = match data_param_map.get(&key_str) {
-                            Some(param) => format!("{:?}", param.type_),
-                            None => "Unknown".to_string(),
-                        };
-
+        } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
+            // Data parameter - handle based on data format
+            match spec.data_format {
+                ScSpecEventDataFormat::SingleValue => {
+                    params.insert(
+                        param_name,
+                        json!({
+                            "value": sc_val_to_json(&event_body.data),
+                            "type": format!("{:?}", param.type_),
+                            "location": "data"
+                        })
+                    );
+                },
+                ScSpecEventDataFormat::Map => {
+                    if let Some(val) = map_data_entries.get(&param_name) {
                         params.insert(
-                            key_str,
+                            param_name,
                             json!({
-                                "value": sc_val_to_json(&entry.val),
-                                "type": type_str,
+                                "value": sc_val_to_json(val),
+                                "type": format!("{:?}", param.type_),
                                 "location": "data"
                             })
                         );
                     }
-                }
-            }
-        },
-        ScSpecEventDataFormat::Vec => {
-            if let ScVal::Vec(Some(vec_entries)) = &event_body.data {
-                for (i, val) in vec_entries.iter().enumerate() {
-                    let param_name = if i < data_params.len() {
-                        data_params[i].name.to_string()
-                    } else {
-                        format!("param_{}", i)
-                    };
+                },
+                ScSpecEventDataFormat::Vec => {
+                    // Find the index of this data param among all data params
+                    let data_param_index = spec.params.iter()
+                        .filter(|p| p.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data)
+                        .position(|p| p.name == param.name)
+                        .unwrap_or(0);
 
-                    let type_str = if i < data_params.len() {
-                        format!("{:?}", data_params[i].type_)
-                    } else {
-                        "Unknown".to_string()
-                    };
-
-                    params.insert(
-                        param_name,
-                        json!({
-                            "value": sc_val_to_json(val),
-                            "type": type_str,
-                            "location": "data"
-                        })
-                    );
-                }
+                    if data_param_index < vec_data_entries.len() {
+                        params.insert(
+                            param_name,
+                            json!({
+                                "value": sc_val_to_json(vec_data_entries[data_param_index]),
+                                "type": format!("{:?}", param.type_),
+                                "location": "data"
+                            })
+                        );
+                    }
+                },
             }
-        },
+        }
+    }
+
+    // Include any additional data entries not explicitly defined in the spec
+    // (Only for Map format, as we want to be lenient in matching)
+    if spec.data_format == ScSpecEventDataFormat::Map {
+        for (key, val) in &map_data_entries {
+            if !params.contains_key(key) {
+                params.insert(
+                    key.clone(),
+                    json!({
+                        "value": sc_val_to_json(val),
+                        "type": "Unknown",
+                        "location": "data"
+                    })
+                );
+            }
+        }
     }
 
     // Add the flattened parameters to the result
-    result.insert("params".to_string(), JsonValue::Object(params));
+    // Convert IndexMap to serde_json Map
+    let params_json = params.into_iter().fold(
+        serde_json::Map::new(),
+        |mut acc, (k, v)| {
+            acc.insert(k, v);
+            acc
+        }
+    );
+
+    result.insert("params".to_string(), JsonValue::Object(params_json));
 
     JsonValue::Object(result)
 }
