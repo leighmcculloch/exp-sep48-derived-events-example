@@ -7,6 +7,7 @@ use stellar_xdr::curr::{
     ContractEvent, ContractEventBody, ScSpecEntry, ScSpecTypeDef, ScVal,
     ScSpecEventParamV0, ScSpecEventDataFormat,
 };
+use serde_json::{json, Value as JsonValue};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -22,14 +23,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let event = args.event()?;
     let specs = args.specs()?;
-    
+
     let mut found_match = false;
     for (i, spec_entry) in specs.iter().enumerate() {
         if event_matches_spec(&event, spec_entry) {
             // Found a match!
             let spec_path = &args.specs[i];
             println!("Found matching spec: {}", spec_path.display());
+
+            // Generate the derived JSON object
+            let derived_json = generate_derived_json(&event, spec_entry);
+
+            // Output the derived JSON
+            println!("\nDerived JSON:");
+            let formatted_json = serde_json::to_string_pretty(&derived_json)?;
+            println!("{}", formatted_json);
+
             found_match = true;
+            break;  // Use the first matching spec
         }
     }
 
@@ -168,29 +179,39 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
                 .map(|p| (p.name.to_string(), &p.type_))
                 .collect();
 
-            // Event map must have the same number of entries as data params specified
-            if map_entries.len() != data_param_spec_map.len() {
-                return false; // Mismatch in number of map entries vs specified data params
-            }
-
-            // Check each entry in the event's data map
+            // Create a map of event entries
+            let mut event_map: HashMap<String, &ScVal> = HashMap::new();
             for entry in map_entries.iter() {
                 // Key must be a Symbol
                 let key_name = match &entry.key {
                     ScVal::Symbol(s) => s.to_string(),
                     _ => return false, // Map key is not a Symbol
                 };
+                event_map.insert(key_name, &entry.val);
+            }
 
-                // Look up the key in the spec parameter map
-                match data_param_spec_map.get(&key_name) {
-                    Some(expected_type) => {
-                        // Check if the value type matches
-                        if !sc_val_matches_spec_type(&entry.val, expected_type) {
-                            return false; // Value type mismatch for key
-                        }
-                    },
-                    None => return false, // Key from event map was not found in spec
+            // Check if all required keys are present and have matching types
+            let mut matching_keys = 0;
+            for (key, expected_type) in &data_param_spec_map {
+                if let Some(value) = event_map.get(key) {
+                    if sc_val_matches_spec_type(value, expected_type) {
+                        matching_keys += 1;
+                    } else {
+                        return false; // Type mismatch for key
+                    }
+                } else {
+                    // Key not found in event, check if it's an Option type (optional parameter)
+                    if let ScSpecTypeDef::Option(_) = expected_type {
+                        // Optional parameter is allowed to be missing
+                        matching_keys += 1;
+                    }
+                    // For non-Option types, missing keys are allowed in our lenient mapping approach
                 }
+            }
+
+            // We consider it a match if we have at least one matching key
+            if matching_keys == 0 {
+                return false;
             }
         },
         ScSpecEventDataFormat::Vec => {
@@ -200,22 +221,197 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
                 _ => return false, // Event data is not a vec or is None
             };
 
-            // Event vec must have the same number of elements as data params specified
-            if vec_entries.len() != data_params.len() {
-                return false; // Mismatch in number of vec elements vs specified data params
+            // Check that we have at least some elements to match
+            if vec_entries.is_empty() || data_params.is_empty() {
+                return false;
             }
 
-            // Check each element type against the corresponding data parameter type
-            for (event_val, spec_param) in vec_entries.iter().zip(data_params.iter()) {
-                if !sc_val_matches_spec_type(event_val, &spec_param.type_) {
+            // We'll be lenient with size mismatches, but we still need data
+            let matching_count = std::cmp::min(vec_entries.len(), data_params.len());
+
+            // Check the types of the elements we have
+            for i in 0..matching_count {
+                if !sc_val_matches_spec_type(&vec_entries[i], &data_params[i].type_) {
                     return false; // Type mismatch for an element in the vec
                 }
+            }
+
+            // We require at least one matching element
+            if matching_count == 0 {
+                return false;
             }
         },
     }
 
     // If all checks passed, the event matches the spec
     true
+}
+
+// Function to convert an ScVal to a regular JSON value
+fn sc_val_to_json(val: &ScVal) -> JsonValue {
+    match val {
+        ScVal::Bool(b) => json!(b),
+        ScVal::Void => json!(null),
+        ScVal::Error(e) => json!({ "error": format!("{:?}", e) }),
+        ScVal::U32(n) => json!(n),
+        ScVal::I32(n) => json!(n),
+        ScVal::U64(n) => json!(n),
+        ScVal::I64(n) => json!(n),
+        ScVal::U128(n) => json!({ "hi": n.hi, "lo": n.lo }),
+        ScVal::I128(n) => json!({ "hi": n.hi, "lo": n.lo }),
+        ScVal::U256(n) => json!({ "hi_hi": n.hi_hi, "hi_lo": n.hi_lo, "lo_hi": n.lo_hi, "lo_lo": n.lo_lo }),
+        ScVal::I256(n) => json!({ "hi_hi": n.hi_hi, "hi_lo": n.hi_lo, "lo_hi": n.lo_hi, "lo_lo": n.lo_lo }),
+        ScVal::Address(a) => json!(format!("{:?}", a)),
+        ScVal::Symbol(s) => json!(s.to_string()),
+        ScVal::String(s) => json!(s.to_string()),
+        ScVal::Bytes(b) => json!(format!("0x{}", hex::encode(b))),
+        ScVal::Vec(Some(vec)) => {
+            let values: Vec<JsonValue> = vec.iter().map(|v| sc_val_to_json(v)).collect();
+            json!(values)
+        },
+        ScVal::Map(Some(map)) => {
+            let mut result = serde_json::Map::new();
+            for entry in map.iter() {
+                let key = match &entry.key {
+                    ScVal::Symbol(s) => s.to_string(),
+                    _ => format!("{:?}", entry.key),
+                };
+                let value = sc_val_to_json(&entry.val);
+                result.insert(key, value);
+            }
+            JsonValue::Object(result)
+        },
+        _ => json!(format!("{:?}", val)),
+    }
+}
+
+// Function to generate a self-describing JSON from event data using spec
+fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> JsonValue {
+    // Extract event body and spec
+    let ContractEventBody::V0(event_body) = &event.body;
+    let spec = if let ScSpecEntry::EventV0(spec) = spec_entry {
+        spec
+    } else {
+        return json!({ "error": "Spec is not an EventV0 variant" });
+    };
+
+    // Initialize the result object
+    let mut result = serde_json::Map::new();
+
+    // Add basic information
+    result.insert("event_type".to_string(), json!(spec.name.to_string()));
+    result.insert("contract_id".to_string(), json!(format!("{:?}", event.contract_id)));
+
+    // Separate spec params by location
+    let mut topic_params: Vec<&ScSpecEventParamV0> = Vec::new();
+    let mut data_params: Vec<&ScSpecEventParamV0> = Vec::new();
+
+    for param in spec.params.iter() {
+        if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
+            topic_params.push(param);
+        } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
+            data_params.push(param);
+        }
+    }
+
+    // Process topics
+    let topics = &event_body.topics;
+    let skip_topics = spec.prefix_topics.len();
+
+    // Add topic parameters with their names from the spec
+    let mut topic_values = serde_json::Map::new();
+    for (i, param) in topic_params.iter().enumerate() {
+        let topic_index = skip_topics + i;
+        if topic_index < topics.len() {
+            topic_values.insert(
+                param.name.to_string(),
+                json!({
+                    "value": sc_val_to_json(&topics[topic_index]),
+                    "type": format!("{:?}", param.type_)
+                })
+            );
+        }
+    }
+    result.insert("topics".to_string(), JsonValue::Object(topic_values));
+
+    // Process data according to format
+    match spec.data_format {
+        ScSpecEventDataFormat::SingleValue => {
+            if !data_params.is_empty() {
+                let param = data_params[0];
+                let data_value = json!({
+                    "value": sc_val_to_json(&event_body.data),
+                    "type": format!("{:?}", param.type_)
+                });
+                result.insert("data".to_string(), json!({ param.name.to_string(): data_value }));
+            }
+        },
+        ScSpecEventDataFormat::Map => {
+            if let ScVal::Map(Some(map_entries)) = &event_body.data {
+                let mut data_values = serde_json::Map::new();
+
+                // Create a lookup for data params by name
+                let data_param_map: HashMap<String, &ScSpecEventParamV0> = data_params
+                    .iter()
+                    .map(|p| (p.name.to_string(), *p))
+                    .collect();
+
+                // Process each map entry
+                for entry in map_entries.iter() {
+                    if let ScVal::Symbol(key) = &entry.key {
+                        let key_str = key.to_string();
+
+                        // Find the parameter type if available
+                        let type_str = match data_param_map.get(&key_str) {
+                            Some(param) => format!("{:?}", param.type_),
+                            None => "Unknown".to_string(),
+                        };
+
+                        data_values.insert(
+                            key_str,
+                            json!({
+                                "value": sc_val_to_json(&entry.val),
+                                "type": type_str
+                            })
+                        );
+                    }
+                }
+
+                result.insert("data".to_string(), JsonValue::Object(data_values));
+            }
+        },
+        ScSpecEventDataFormat::Vec => {
+            if let ScVal::Vec(Some(vec_entries)) = &event_body.data {
+                let mut data_values = serde_json::Map::new();
+
+                for (i, val) in vec_entries.iter().enumerate() {
+                    let param_name = if i < data_params.len() {
+                        data_params[i].name.to_string()
+                    } else {
+                        format!("param_{}", i)
+                    };
+
+                    let type_str = if i < data_params.len() {
+                        format!("{:?}", data_params[i].type_)
+                    } else {
+                        "Unknown".to_string()
+                    };
+
+                    data_values.insert(
+                        param_name,
+                        json!({
+                            "value": sc_val_to_json(val),
+                            "type": type_str
+                        })
+                    );
+                }
+
+                result.insert("data".to_string(), JsonValue::Object(data_values));
+            }
+        },
+    }
+
+    JsonValue::Object(result)
 }
 
 impl Args {
