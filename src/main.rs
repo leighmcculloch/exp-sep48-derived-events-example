@@ -4,8 +4,7 @@ use std::collections::HashMap;
 
 use clap::Parser;
 use stellar_xdr::curr::{
-    ContractEvent, ContractEventBody, ScSpecEntry, ScSpecTypeDef, ScVal,
-    ScSpecEventParamV0, ScSpecEventDataFormat,
+    ContractEvent, ContractEventBody, ScSpecEntry, ScSpecEventDataFormat, ScSpecEventParamLocationV0, ScSpecEventParamV0, ScSpecTypeDef, ScVal
 };
 use serde_json::{json, Value as JsonValue};
 
@@ -132,9 +131,9 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
     let mut data_params: Vec<&ScSpecEventParamV0> = Vec::new();
 
     for param in spec.params.iter() {
-        if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
+        if param.location == ScSpecEventParamLocationV0::TopicList {
             topic_params.push(param);
-        } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
+        } else if param.location == ScSpecEventParamLocationV0::Data {
             data_params.push(param);
         } else {
             return false; // Unknown location
@@ -252,44 +251,6 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
     true
 }
 
-// Function to convert an ScVal to a regular JSON value
-fn sc_val_to_json(val: &ScVal) -> JsonValue {
-    match val {
-        ScVal::Bool(b) => json!(b),
-        ScVal::Void => json!(null),
-        ScVal::Error(e) => json!({ "error": format!("{:?}", e) }),
-        ScVal::U32(n) => json!(n),
-        ScVal::I32(n) => json!(n),
-        ScVal::U64(n) => json!(n),
-        ScVal::I64(n) => json!(n),
-        ScVal::U128(n) => json!({ "hi": n.hi, "lo": n.lo }),
-        ScVal::I128(n) => json!({ "hi": n.hi, "lo": n.lo }),
-        ScVal::U256(n) => json!({ "hi_hi": n.hi_hi, "hi_lo": n.hi_lo, "lo_hi": n.lo_hi, "lo_lo": n.lo_lo }),
-        ScVal::I256(n) => json!({ "hi_hi": n.hi_hi, "hi_lo": n.hi_lo, "lo_hi": n.lo_hi, "lo_lo": n.lo_lo }),
-        ScVal::Address(a) => json!(format!("{:?}", a)),
-        ScVal::Symbol(s) => json!(s.to_string()),
-        ScVal::String(s) => json!(s.to_string()),
-        ScVal::Bytes(b) => json!(format!("0x{}", hex::encode(b))),
-        ScVal::Vec(Some(vec)) => {
-            let values: Vec<JsonValue> = vec.iter().map(|v| sc_val_to_json(v)).collect();
-            json!(values)
-        },
-        ScVal::Map(Some(map)) => {
-            let mut result = serde_json::Map::new();
-            for entry in map.iter() {
-                let key = match &entry.key {
-                    ScVal::Symbol(s) => s.to_string(),
-                    _ => format!("{:?}", entry.key),
-                };
-                let value = sc_val_to_json(&entry.val);
-                result.insert(key, value);
-            }
-            JsonValue::Object(result)
-        },
-        _ => json!(format!("{:?}", val)),
-    }
-}
-
 // Function to generate a self-describing JSON from event data using spec
 fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> JsonValue {
     // Extract event body and spec
@@ -331,49 +292,37 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
     let mut params = serde_json::Map::new();
     
     // Count data parameters we've processed so far (for vec indexing)
-    let mut data_param_count = 0;
     let mut topic_param_count = 0;
+    let mut data_param_count = 0;
     
     // Build parameters in spec-defined order by iterating through the spec params
     for param in spec.params.iter() {
         let param_name = param.name.to_string();
         
-        if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
+        if param.location == ScSpecEventParamLocationV0::TopicList {
             // Topic parameter - get from topics list (after prefix topics)
             let topic_index = skip_topics + topic_param_count;
             if topic_index < topics.len() {
                 params.insert(
                     param_name,
-                    json!({
-                        "value": sc_val_to_json(&topics[topic_index]),
-                        "type": format!("{:?}", param.type_),
-                        "location": "topic"
-                    })
+                    serde_json::to_value(&topics[topic_index]).unwrap(),
                 );
                 topic_param_count += 1;
             }
-        } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
+        } else if param.location == ScSpecEventParamLocationV0::Data {
             // Data parameter - handle based on data format
             match spec.data_format {
                 ScSpecEventDataFormat::SingleValue => {
                     params.insert(
                         param_name,
-                        json!({
-                            "value": sc_val_to_json(&event_body.data),
-                            "type": format!("{:?}", param.type_),
-                            "location": "data"
-                        })
+                        serde_json::to_value(&event_body.data).unwrap(),
                     );
                 },
                 ScSpecEventDataFormat::Map => {
                     if let Some(val) = map_data_entries.get(&param_name) {
                         params.insert(
                             param_name,
-                            json!({
-                                "value": sc_val_to_json(val),
-                                "type": format!("{:?}", param.type_),
-                                "location": "data"
-                            })
+                            serde_json::to_value(val).unwrap(),
                         );
                     }
                 },
@@ -381,11 +330,7 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
                     if data_param_count < vec_data_entries.len() {
                         params.insert(
                             param_name,
-                            json!({
-                                "value": sc_val_to_json(vec_data_entries[data_param_count]),
-                                "type": format!("{:?}", param.type_),
-                                "location": "data"
-                            })
+                            serde_json::to_value(vec_data_entries[data_param_count]).unwrap(),
                         );
                         data_param_count += 1;
                     }
@@ -401,11 +346,7 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
             if !params.contains_key(key) {
                 params.insert(
                     key.clone(),
-                    json!({
-                        "value": sc_val_to_json(val),
-                        "type": "Unknown",
-                        "location": "data"
-                    })
+                    serde_json::to_value(val).unwrap(),
                 );
             }
         }
