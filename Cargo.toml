@@ -1,0 +1,10 @@
+[package]
+name = "consumer-example-events"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.stellar-xdr]
+version = "*"
+features = ["std", "curr", "serde"]
+git = "https://github.com/stellar/rs-stellar-xdr"
+branch = "add-events-to-contract-spec"
