@@ -165,7 +165,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hex",
- "indexmap 2.9.0",
  "serde",
  "serde_json",
  "stellar-xdr",

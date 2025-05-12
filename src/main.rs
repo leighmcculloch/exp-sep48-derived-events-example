@@ -23,22 +23,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let event = args.event()?;
     let specs = args.specs()?;
-
+    
     let mut found_match = false;
     for (i, spec_entry) in specs.iter().enumerate() {
         if event_matches_spec(&event, spec_entry) {
             // Found a match!
             let spec_path = &args.specs[i];
             println!("Found matching spec: {}", spec_path.display());
-
+            
             // Generate the derived JSON object
             let derived_json = generate_derived_json(&event, spec_entry);
-
+            
             // Output the derived JSON
             println!("\nDerived JSON:");
             let formatted_json = serde_json::to_string_pretty(&derived_json)?;
             println!("{}", formatted_json);
-
+            
             found_match = true;
             break;  // Use the first matching spec
         }
@@ -233,14 +233,14 @@ fn event_matches_spec(event: &ContractEvent, spec_entry: &ScSpecEntry) -> bool {
 
             // We'll be lenient with size mismatches, but we still need data
             let matching_count = std::cmp::min(vec_entries.len(), data_params.len());
-
+            
             // Check the types of the elements we have
             for i in 0..matching_count {
                 if !sc_val_matches_spec_type(&vec_entries[i], &data_params[i].type_) {
                     return false; // Type mismatch for an element in the vec
                 }
             }
-
+            
             // We require at least one matching element
             if matching_count == 0 {
                 return false;
@@ -307,10 +307,10 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
     result.insert("event_type".to_string(), json!(spec.name.to_string()));
     result.insert("contract_id".to_string(), json!(format!("{:?}", event.contract_id)));
 
-    // Keep track of parameters in spec-defined order
+    // Access the event data
     let topics = &event_body.topics;
     let skip_topics = spec.prefix_topics.len();
-
+    
     // Create a map for looking up map data entries by key
     let mut map_data_entries: HashMap<String, &ScVal> = HashMap::new();
     if let ScVal::Map(Some(map_entries)) = &event_body.data {
@@ -320,27 +320,27 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
             }
         }
     }
-
+    
     // Extract vec data entries if available
     let mut vec_data_entries: Vec<&ScVal> = Vec::new();
     if let ScVal::Vec(Some(vec_entries)) = &event_body.data {
         vec_data_entries = vec_entries.iter().collect();
     }
-
-    // Initialize ordered parameters map
-    // Use LinkedHashMap to preserve insertion order
-    use indexmap::IndexMap;
-    let mut params = IndexMap::new();
-
-    // Add parameters in the original spec order
-    for (i, param) in spec.params.iter().enumerate() {
+    
+    // Initialize the flattened parameters
+    let mut params = serde_json::Map::new();
+    
+    // Count data parameters we've processed so far (for vec indexing)
+    let mut data_param_count = 0;
+    let mut topic_param_count = 0;
+    
+    // Build parameters in spec-defined order by iterating through the spec params
+    for param in spec.params.iter() {
         let param_name = param.name.to_string();
-
-        // There are only two possible locations in the current XDR spec:
-        // TopicList and Data. We handle them explicitly.
+        
         if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::TopicList {
-            // Topic parameter
-            let topic_index = skip_topics + i - params.len(); // Adjust index for previous processed params
+            // Topic parameter - get from topics list (after prefix topics)
+            let topic_index = skip_topics + topic_param_count;
             if topic_index < topics.len() {
                 params.insert(
                     param_name,
@@ -350,6 +350,7 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
                         "location": "topic"
                     })
                 );
+                topic_param_count += 1;
             }
         } else if param.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data {
             // Data parameter - handle based on data format
@@ -377,27 +378,22 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
                     }
                 },
                 ScSpecEventDataFormat::Vec => {
-                    // Find the index of this data param among all data params
-                    let data_param_index = spec.params.iter()
-                        .filter(|p| p.location == stellar_xdr::curr::ScSpecEventParamLocationV0::Data)
-                        .position(|p| p.name == param.name)
-                        .unwrap_or(0);
-
-                    if data_param_index < vec_data_entries.len() {
+                    if data_param_count < vec_data_entries.len() {
                         params.insert(
                             param_name,
                             json!({
-                                "value": sc_val_to_json(vec_data_entries[data_param_index]),
+                                "value": sc_val_to_json(vec_data_entries[data_param_count]),
                                 "type": format!("{:?}", param.type_),
                                 "location": "data"
                             })
                         );
+                        data_param_count += 1;
                     }
                 },
             }
         }
     }
-
+    
     // Include any additional data entries not explicitly defined in the spec
     // (Only for Map format, as we want to be lenient in matching)
     if spec.data_format == ScSpecEventDataFormat::Map {
@@ -414,18 +410,9 @@ fn generate_derived_json(event: &ContractEvent, spec_entry: &ScSpecEntry) -> Jso
             }
         }
     }
-
+    
     // Add the flattened parameters to the result
-    // Convert IndexMap to serde_json Map
-    let params_json = params.into_iter().fold(
-        serde_json::Map::new(),
-        |mut acc, (k, v)| {
-            acc.insert(k, v);
-            acc
-        }
-    );
-
-    result.insert("params".to_string(), JsonValue::Object(params_json));
+    result.insert("params".to_string(), JsonValue::Object(params));
 
     JsonValue::Object(result)
 }
