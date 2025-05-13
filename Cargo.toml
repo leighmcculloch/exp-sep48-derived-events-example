@@ -13,4 +13,4 @@ hex = "0.4"
 version = "*"
 features = ["std", "curr", "serde"]
 git = "https://github.com/stellar/rs-stellar-xdr"
-branch = "add-events-to-contract-spec"
+branch = "main"

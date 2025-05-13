@@ -5,7 +5,7 @@ A utility for parsing and matching Stellar Contract Events against SEP-48 Contra
 This code base is only an example, and doesn't cover all scenarios or all use cases. It shows broadly what's possible with the introduction of events into SEP-49 Contract Interface Specifications, as currently being discussed in [stellar#1724](https://github.com/orgs/stellar/discussions/1724).
 
 > [!NOTE]
-> This tool uses unreleased XDR from [stellar-xdr#268](https://github.com/stellar/stellar-xdr/pull/268), via the unreleased [rs-stellar-xdr#437](https://github.com/stellar/rs-stellar-xdr/pull/437).
+> This tool uses unreleased XDR.
 
 ## Overview
 
